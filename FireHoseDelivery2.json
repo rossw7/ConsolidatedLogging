@@ -1,0 +1,474 @@
+{
+    "AWSTemplateFormatVersion" : "2010-09-09",
+    "Description" : "A Elasticsearch/Kibana stack that consolidates real-time data from CloudWatch Logs using a Subscription Filter. **NOTE** This template creates one or more Amazon EC2 instances, an Amazon Kinesis stream. You will be billed for the AWS resources used if you create a stack from this template. This template requires setting the \"Create IAM resources\" parameter to True.",
+    "Resources" : {
+        "VPC": {
+            "Type": "AWS::EC2::VPC",
+            "Properties": {
+                "CidrBlock": {"Ref": "VPCCIDR"},
+                "InstanceTenancy": "default",
+                "EnableDnsSupport": true,
+                "EnableDnsHostnames": true,
+                "Tags": [{"Key": "Name","Value": {"Ref": "AWS::StackName"}}]
+            }
+        },
+        "ElasticSearchConsolidatedLogsDomain" : {
+            "Type" : "AWS::Elasticsearch::Domain",
+            "Properties" : {
+            "DomainName" : "consolidatedlogs",
+            "EBSOptions": {
+                "EBSEnabled": true,
+                "Iops": 0,
+                "VolumeSize": 20,
+                "VolumeType": "gp2"
+            },
+            "ElasticsearchClusterConfig" : {
+                    "InstanceCount" : 2,
+                    "InstanceType" : "m4.xlarge.elasticsearch",
+                    "ZoneAwarenessEnabled" : true
+                    },
+            "ElasticsearchVersion" : "6.3",
+            "Tags" : [ {"Key" : "Name", "Value" : { "Ref" : "AWS::StackId"} } ]
+            }
+        },
+
+        "CloudWatchLogsKinesisRole" : {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument" : {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": { "Service": { "Fn::Join": ["", ["logs.", { "Ref": "AWS::Region" } ,".amazonaws.com" ]]}},
+                            "Action": "sts:AssumeRole"
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Principal": { "Service": "kinesis.amazonaws.com"},
+                            "Action": "sts:AssumeRole"
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Principal": { "Service": "es.amazonaws.com"},
+                            "Action": "sts:AssumeRole"
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"Service": "firehose.amazonaws.com"},
+                            "Action": "sts:AssumeRole",
+                            "Condition": {"StringEquals": {"sts:ExternalId":{ "Ref": "AWS::AccountId" }}}
+                        }
+                    ]
+                },
+                "Policies" : [{
+                    "PolicyName": "StreamAccess",
+                    "PolicyDocument": {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                        {
+                            "Sid": "VisualEditor0",
+                            "Effect": "Allow",
+                            "Action": [
+                                "es:DescribeReservedElasticsearchInstanceOfferings",
+                                "es:DescribeReservedElasticsearchInstances",
+                                "es:ListDomainNames",
+                                "es:PurchaseReservedElasticsearchInstance",
+                                "es:DeleteElasticsearchServiceRole",
+                                "es:ListElasticsearchInstanceTypes",
+                                "es:DescribeElasticsearchInstanceTypeLimits",
+                                "es:ListElasticsearchVersions"
+                            ],
+                            "Resource": "*"
+                        },
+                        {
+                            "Sid": "VisualEditor10",
+                            "Effect": "Allow",
+                            "Action": [
+                                "glue:GetTableVersions",
+                                "kinesis:GetShardIterator",
+                                "kinesis:GetRecords",
+                                "kinesis:PutRecord",
+                                "kinesis:DescribeStream",
+                                "logs:PutLogEvents"
+                            ],
+                            "Resource": "*"
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Action": "es:*",
+                            "Resource": "*"
+                        }
+                    ]
+                    }
+                } ]
+        }
+        },
+        "CloudWatchLogsKinesisPolicy": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+            "PolicyName": "CloudWatchLogsKinesisPolicy",
+            "Roles": [ { "Ref": "CloudWatchLogsKinesisRole" } ],
+            "PolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["kinesis:PutRecord","kinesis:DescribeStream"],
+                    "Resource": {"Fn::GetAtt": ["GuardDutyKinesisFirehoseToElasticSearch","Arn"]}
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["firehose:*"],
+                    "Resource": {"Fn::GetAtt": ["GuardDutyKinesisFirehoseToElasticSearch","Arn"]}
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "es:*",
+                    "Resource": {"Fn::GetAtt": ["ElasticSearchConsolidatedLogsDomain","DomainArn"]}
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["log:PutLogEvents"],
+                    "Resource": "*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "es:DescribeElasticsearchDomain",
+                        "es:DescribeElasticsearchDomains",
+                        "es:DescribeElasticsearchDomainConfig",
+                        "es:ESHttpPost",
+                        "es:ESHttpPut"
+                    ],
+                    "Resource": [
+                    {"Fn::Sub" : ["arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Domain}",{ "Domain": {"Ref" : "ElasticSearchConsolidatedLogsDomain" }} ]},
+                    {"Fn::Sub" : ["arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Domain}/*",{ "Domain": {"Ref" : "ElasticSearchConsolidatedLogsDomain" }} ]}
+                    ]
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "lambda:InvokeFunction",
+                        "lambda:GetFunctionConfiguration"
+                    ],
+                    "Resource": [
+                        {"Fn::Sub" : "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:%FIREHOSE_DEFAULT_FUNCTION%:%FIREHOSE_DEFAULT_VERSION%"}
+                        ]
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                    "es:ESHttpGet"
+                    ],
+                "Resource": [
+                    {"Fn::Sub" : ["arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Domain}/_all/_settings",{ "Domain": {"Ref" : "ElasticSearchConsolidatedLogsDomain" }} ]},
+                    {"Fn::Sub" : ["arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Domain}/_cluster/stats",{ "Domain": {"Ref" : "ElasticSearchConsolidatedLogsDomain" }} ]},
+                    {"Fn::Sub" : ["arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Domain}/_nodes",{ "Domain": {"Ref" : "ElasticSearchConsolidatedLogsDomain" }} ]},
+                    {"Fn::Sub" : ["arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Domain}/_nodes/stats",{ "Domain": {"Ref" : "ElasticSearchConsolidatedLogsDomain" }} ]},
+                    {"Fn::Sub" : ["arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Domain}/_nodes/*/stats",{ "Domain": {"Ref" : "ElasticSearchConsolidatedLogsDomain" }} ]},
+                    {"Fn::Sub" : ["arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Domain}/_stats",{ "Domain": {"Ref" : "ElasticSearchConsolidatedLogsDomain" }} ]},
+                    {"Fn::Sub" : ["arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Domain}/*/_stats",{ "Domain": {"Ref" : "ElasticSearchConsolidatedLogsDomain" }} ]},
+                    {"Fn::Sub" : ["arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Domain}/*/_mapping/log",{ "Domain": {"Ref" : "ElasticSearchConsolidatedLogsDomain" }} ]}
+                    ]
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "iam:PassRole",
+                    "Resource": { "Fn::Join" : ["", ["arn:aws:iam::", { "Ref": "AWS::AccountId" }, ":role/", { "Ref": "CloudWatchLogsKinesisRole" } ]] }
+                }
+                ]
+            }
+            }
+        },
+
+
+        "GuardDutyCloudWatchEventRule": {
+            "Type" : "AWS::Events::Rule",
+            "Properties" : {
+            "Description" : "CloudWatch EventRule to Filter GuardDuty Findings",
+            "EventPattern": {"source": ["aws.guardduty"],"detail-type": ["GuardDuty Finding"]},
+            "State" : "ENABLED",
+            "Targets": [
+                {"Id": "GuardDutyKinesisStream",
+                "Arn": {"Fn::GetAtt": ["GuardDutyKinesisStream","Arn"]},
+                "RoleArn" : {"Fn::GetAtt" : ["CloudWatchLogsKinesisRole","Arn"]}
+                }]
+            }
+        },
+        "GuardDutyFindingsToCloudWatchLogGroup" : {
+            "Type" : "AWS::Logs::LogGroup",
+            "Properties" : {
+            "LogGroupName" : { "Fn::FindInMap" : [ "LogGroupNameList", "AmazonGuardDuty", "Value" ]},
+            "RetentionInDays" : 60
+            }
+        },
+        "GuardDutyFindingsSubscriptionFilter" : {
+            "Type" : "AWS::Logs::SubscriptionFilter",
+            "Properties" : {
+            "DestinationArn" : {"Fn::GetAtt": ["GuardDutyKinesisStream","Arn"]},
+            "FilterPattern" : { "Fn::FindInMap" : [ "LogFormats", "AmazonGuardDuty", "Value" ]},
+            "LogGroupName" : {"Ref": "GuardDutyFindingsToCloudWatchLogGroup"},
+            "RoleArn" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ] }
+            }
+        },
+        "GuardDutyKinesisStream" : {
+            "Type" : "AWS::Kinesis::Stream",
+            "Properties" : {
+            "Name" : "GuardDuty_KinesisStream",
+            "RetentionPeriodHours" : 24,
+            "ShardCount" : 12,
+            "Tags" : [ {"Key" : "Name", "Value" : { "Ref" : "AWS::StackId"} } ]
+            }
+        },
+        "GuardDutyKinesisFirehoseToElasticSearch" : {
+            "Type" : "AWS::KinesisFirehose::DeliveryStream",
+            "Properties" : {
+            "DeliveryStreamName" : "GuardDuty_KinesisFirehose_To_ElasticSearch",
+            "DeliveryStreamType" : "KinesisStreamAsSource",
+            "ElasticsearchDestinationConfiguration" : {
+                "BufferingHints": {"IntervalInSeconds": 60,"SizeInMBs": 50},
+                "DomainARN" : { "Fn::GetAtt" : [ "ElasticSearchConsolidatedLogsDomain", "DomainArn" ]},
+                "IndexName" : "gdt-",
+                "IndexRotationPeriod" : "OneDay",
+                "RetryOptions" : {"DurationInSeconds" : 10},
+                "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ]},
+                "S3BackupMode" : "FailedDocumentsOnly",
+                "S3Configuration" : {
+                    "BucketARN" : { "Fn::GetAtt" : [ "S3BucketFirehoseBackup", "Arn" ] },
+                    "BufferingHints" : {"IntervalInSeconds": 60,"SizeInMBs": 50},
+                    "CompressionFormat" : "GZIP",
+                    "Prefix" : "gdt",
+                    "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ] }
+                },
+                "TypeName" : "gdt"
+            },
+            "KinesisStreamSourceConfiguration" : { "KinesisStreamARN" : { "Fn::GetAtt" : [ "GuardDutyKinesisStream", "Arn" ]}, "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ]}}
+            }
+        },
+
+        
+        "MacieCloudWatchEventRule": {
+            "Type" : "AWS::Events::Rule",
+            "Properties" : {
+            "Description" : "CloudWatch EventRule to Filter Macie Findings",
+            "EventPattern": {"source": ["aws.macie"],"detail-type": ["Macie Finding"]},
+            "State" : "ENABLED",
+            "Targets": [
+                {"Id": "MacieKinesisStream",
+                "Arn": {"Fn::GetAtt": ["MacieKinesisStream","Arn"]},
+                "RoleArn" : {"Fn::GetAtt" : ["CloudWatchLogsKinesisRole","Arn"]}
+                }]
+            }
+        },
+        "MacieFindingsToCloudWatchLogGroup" : {
+            "Type" : "AWS::Logs::LogGroup",
+            "Properties" : {
+            "LogGroupName" : { "Fn::FindInMap" : [ "LogGroupNameList", "AmazonMacie", "Value" ]},
+            "RetentionInDays" : 60
+            }
+        },
+        "MacieFindingsSubscriptionFilter" : {
+            "Type" : "AWS::Logs::SubscriptionFilter",
+            "Properties" : {
+            "DestinationArn" : {"Fn::GetAtt": ["MacieKinesisStream","Arn"]},
+            "FilterPattern" : { "Fn::FindInMap" : [ "LogFormats", "AmazonMacie", "Value" ]},
+            "LogGroupName" : {"Ref": "MacieFindingsToCloudWatchLogGroup"},
+            "RoleArn" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ] }
+            }
+        },
+        "MacieKinesisStream" : {
+            "Type" : "AWS::Kinesis::Stream",
+            "Properties" : {
+            "Name" : "Macie_KinesisStream",
+            "RetentionPeriodHours" : 24,
+            "ShardCount" : 12,
+            "Tags" : [ {"Key" : "Name", "Value" : { "Ref" : "AWS::StackId"} } ]
+            }
+        },
+        "MacieKinesisFirehoseToElasticSearch" : {
+            "Type" : "AWS::KinesisFirehose::DeliveryStream",
+            "Properties" : {
+            "DeliveryStreamName" : "Macie_KinesisFirehose_To_ElasticSearch",
+            "DeliveryStreamType" : "KinesisStreamAsSource",
+            "ElasticsearchDestinationConfiguration" : {
+                "BufferingHints": {"IntervalInSeconds": 60,"SizeInMBs": 50},
+                "DomainARN" : { "Fn::GetAtt" : [ "ElasticSearchConsolidatedLogsDomain", "DomainArn" ]},
+                "IndexName" : "mac-",
+                "IndexRotationPeriod" : "OneDay",
+                "RetryOptions" : {"DurationInSeconds" : 10},
+                "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ]},
+                "S3BackupMode" : "FailedDocumentsOnly",
+                "S3Configuration" : {
+                    "BucketARN" : { "Fn::GetAtt" : [ "S3BucketFirehoseBackup", "Arn" ] },
+                    "BufferingHints" : {"IntervalInSeconds": 60,"SizeInMBs": 50},
+                    "CompressionFormat" : "GZIP",
+                    "Prefix" : "mac",
+                    "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ] }
+                },
+                "TypeName" : "mac"
+            },
+            "KinesisStreamSourceConfiguration" : { "KinesisStreamARN" : { "Fn::GetAtt" : [ "MacieKinesisStream", "Arn" ]}, "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ]}}
+            }
+        },
+
+
+
+        "S3BucketFirehoseBackup": {
+            "DeletionPolicy": "Retain",
+            "Type": "AWS::S3::Bucket",
+            "Properties": {}
+        },
+
+        "CognitoUserPool": {
+            "Type": "AWS::Cognito::UserPool",
+            "Properties": {"UserPoolName": {"Ref" : "AWS::StackName"}}
+        },
+        "CognitoIDPool": {
+            "Type": "AWS::Cognito::IdentityPool",
+            "Properties": {
+                "IdentityPoolName": "ConsolidatedLogsIDPool",
+                "AllowUnauthenticatedIdentities": false,
+                "CognitoIdentityProviders": [
+                    {
+                    "ClientId": {"Ref": "CognitoUserPoolClient"},
+                    "ProviderName": {"Fn::GetAtt": ["CognitoUserPool","ProviderName"]}
+                    }
+                ]
+            }
+        },
+        "CognitoUserPoolClient": {
+            "Type": "AWS::Cognito::UserPoolClient",
+            "Properties": {"GenerateSecret": false,"UserPoolId": {"Ref" : "CognitoUserPool"}}
+        },
+        "FirstKibanaUser": {
+            "Type": "AWS::Cognito::UserPoolUser",
+            "Properties": {
+                "Username": {"Ref" : "EmailAddress"},
+                "UserAttributes": [{"Name": "email","Value": {"Ref" : "EmailAddress"}}],
+                "UserPoolId": {"Ref" : "CognitoUserPool"}
+            }
+        },
+    
+        "CognitoKibanaAuthenticatedPolicy": {
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "es:ESHttp*"
+                            ],
+                            "Resource": [
+                                "*"
+                            ]
+                        }
+                    ]
+                }
+            }
+        },
+        "CognitoKibanaAuthRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": "sts:AssumeRoleWithWebIdentity",
+                            "Principal": {
+                                "Federated": "cognito-identity.amazonaws.com"
+                            },
+                            "Condition": {
+                                "StringEquals": {
+                                    "cognito-identity.amazonaws.com:aud": {"Ref": "CognitoIDPool"}
+                                },
+                                "ForAnyValue:StringLike": {"cognito-identity.amazonaws.com:amr": "authenticated"}
+                            }
+                        }
+                    ]
+                },
+                "ManagedPolicyArns": [
+                    {
+                        "Ref": "CognitoKibanaAuthenticatedPolicy"
+                    }
+                ]
+            }
+        },
+        "RoleAttachment": {
+            "Type": "AWS::Cognito::IdentityPoolRoleAttachment",
+            "Properties": {
+                "IdentityPoolId": {
+                    "Ref": "CognitoIDPool"
+                },
+                "Roles": {
+                    "authenticated": {
+                        "Fn::GetAtt": ["CognitoKibanaAuthRole","Arn"]
+                    }
+                }
+            }
+        }
+    },
+
+    "Mappings" : {
+        "LogFormats" : {
+            "AmazonVPCFlowLogs" : { "Value": "[version, account_id, interface_id, srcaddr, dstaddr, srcport, dstport, protocol, packets, bytes, start, end, action, log_status]" },
+            "AWSLambda": { "Value": "[timestamp=*Z, request_id=\"*-*\", event]" },
+            "AmazonGuardDuty" : { "Value": "" },
+            "AWSCloudTrail" : { "Value": "" },
+            "AmazonMacie" : { "Value": "" },
+            "AmazonInspector" : { "Value": "" },
+            "Custom": { "Value": "" }
+        },
+
+        "LogGroupNameList" : {
+            "AmazonVPCFlowLogs" : { "Value": "VPCCloudWatchLogGroup" },
+            "AWSLambda": { "Value": "LambdaCloudWatchLogGroup" },
+            "AmazonGuardDuty" : { "Value": "GuardDutyCloudWatchLogGroup" },
+            "AWSCloudTrail" : { "Value": "CloudTrailCloudWatchLogGroup" },
+            "AmazonMacie" : { "Value": "MacieCloudWatchLogGroup" },
+            "AmazonInspector" : { "Value": "InspectorCloudWatchLogGroup" },
+            "Custom": { "Value": "CustomCloudWatchLogGroup" }
+        }
+    },
+
+    "Conditions" : {
+        "CreateCWLForStack" : {"Fn::Equals" : [{"Ref" : "MonitorStack"}, "true"]}
+    },
+
+    "Parameters" : {
+        "EmailAddress": {
+            "Type": "String",
+            "Description": "An email address"
+        },
+
+        "AllowedIpRange" : {
+            "Description" : "The IP address range that can be used to access the Kibana interface, the Elasticsearch API, and the EC2 instances via SSH",
+            "Type": "String",
+            "MinLength": "9",
+            "MaxLength": "18",
+            "Default": "0.0.0.0/0",
+            "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+            "ConstraintDescription": "Must be a valid IP CIDR range of the form x.x.x.x/x"
+        },
+        "MonitorStack" : {
+            "Description": "Push logs from Elasticsearch, Nginx, KCL and CloudFormation to CloudWatch Logs",
+            "Type": "String",
+            "Default" : "true",
+            "AllowedValues" : ["true", "false"]
+        },
+        "VPCCIDR": {
+            "AllowedPattern": "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\\/(1[6-9]|2[0-8]))$",
+            "ConstraintDescription": "CIDR block parameter must be in the form x.x.x.x/16-28",
+            "Default": "172.16.0.0/27",
+            "Description": "CIDR Block for the VPC",
+            "Type": "String"
+        }
+    },
+
+    "Outputs" : {
+        "DomainEndpoint": {"Value": {"Fn::GetAtt": ["ElasticSearchConsolidatedLogsDomain", "DomainEndpoint"]}}
+    }
+}
