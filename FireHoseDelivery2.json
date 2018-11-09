@@ -313,11 +313,241 @@
         },
 
 
+        "InspectorCloudWatchEventRule": {
+            "Type" : "AWS::Events::Rule",
+            "Properties" : {
+            "Description" : "CloudWatch EventRule to Filter Inspector Findings",
+            "EventPattern": {"source": ["aws.inspector"]},
+            "State" : "ENABLED",
+            "Targets": [
+                {"Id": "InspectorKinesisStream",
+                "Arn": {"Fn::GetAtt": ["InspectorKinesisStream","Arn"]},
+                "RoleArn" : {"Fn::GetAtt" : ["CloudWatchLogsKinesisRole","Arn"]}
+                }]
+            }
+        },
+        "InspectorFindingsToCloudWatchLogGroup" : {
+            "Type" : "AWS::Logs::LogGroup",
+            "Properties" : {
+            "LogGroupName" : { "Fn::FindInMap" : [ "LogGroupNameList", "AmazonInspector", "Value" ]},
+            "RetentionInDays" : 60
+            }
+        },
+        "InspectorFindingsSubscriptionFilter" : {
+            "Type" : "AWS::Logs::SubscriptionFilter",
+            "Properties" : {
+            "DestinationArn" : {"Fn::GetAtt": ["InspectorKinesisStream","Arn"]},
+            "FilterPattern" : { "Fn::FindInMap" : [ "LogFormats", "AmazonInspector", "Value" ]},
+            "LogGroupName" : {"Ref": "InspectorFindingsToCloudWatchLogGroup"},
+            "RoleArn" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ] }
+            }
+        },
+        "InspectorKinesisStream" : {
+            "Type" : "AWS::Kinesis::Stream",
+            "Properties" : {
+            "Name" : "Inspector_KinesisStream",
+            "RetentionPeriodHours" : 24,
+            "ShardCount" : 12,
+            "Tags" : [ {"Key" : "Name", "Value" : { "Ref" : "AWS::StackId"} } ]
+            }
+        },
+        "InspectorKinesisFirehoseToElasticSearch" : {
+            "Type" : "AWS::KinesisFirehose::DeliveryStream",
+            "Properties" : {
+            "DeliveryStreamName" : "Inspector_KinesisFirehose_To_ElasticSearch",
+            "DeliveryStreamType" : "KinesisStreamAsSource",
+            "ElasticsearchDestinationConfiguration" : {
+                "BufferingHints": {"IntervalInSeconds": 60,"SizeInMBs": 50},
+                "DomainARN" : { "Fn::GetAtt" : [ "ElasticSearchConsolidatedLogsDomain", "DomainArn" ]},
+                "IndexName" : "ins-",
+                "IndexRotationPeriod" : "OneDay",
+                "RetryOptions" : {"DurationInSeconds" : 10},
+                "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ]},
+                "S3BackupMode" : "FailedDocumentsOnly",
+                "S3Configuration" : {
+                    "BucketARN" : { "Fn::GetAtt" : [ "S3BucketFirehoseBackup", "Arn" ] },
+                    "BufferingHints" : {"IntervalInSeconds": 60,"SizeInMBs": 50},
+                    "CompressionFormat" : "GZIP",
+                    "Prefix" : "ins",
+                    "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ] }
+                },
+                "TypeName" : "ins"
+            },
+            "KinesisStreamSourceConfiguration" : { "KinesisStreamARN" : { "Fn::GetAtt" : [ "InspectorKinesisStream", "Arn" ]}, "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ]}}
+            }
+        },
+
+        "VPCFlowCloudWatchEventRule": {
+            "Type" : "AWS::Events::Rule",
+            "Properties" : {
+            "Description" : "CloudWatch EventRule to Filter VPCFlow Findings",
+            "EventPattern": {"source": ["aws.vpcflow"]},
+            "State" : "ENABLED",
+            "Targets": [
+                {"Id": "VPCFlowKinesisStream",
+                "Arn": {"Fn::GetAtt": ["VPCFlowKinesisStream","Arn"]},
+                "RoleArn" : {"Fn::GetAtt" : ["CloudWatchLogsKinesisRole","Arn"]}
+                }]
+            }
+        },
+        "VPCFlowFindingsToCloudWatchLogGroup" : {
+            "Type" : "AWS::Logs::LogGroup",
+            "Properties" : {
+            "LogGroupName" : { "Fn::FindInMap" : [ "LogGroupNameList", "AmazonVPCFlowLogs", "Value" ]},
+            "RetentionInDays" : 60
+            }
+        },
+        "VPCFlowFindingsSubscriptionFilter" : {
+            "Type" : "AWS::Logs::SubscriptionFilter",
+            "Properties" : {
+            "DestinationArn" : {"Fn::GetAtt": ["VPCFlowKinesisStream","Arn"]},
+            "FilterPattern" : { "Fn::FindInMap" : [ "LogFormats", "AmazonVPCFlowLogs", "Value" ]},
+            "LogGroupName" : {"Ref": "VPCFlowFindingsToCloudWatchLogGroup"},
+            "RoleArn" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ] }
+            }
+        },
+        "VPCFlowKinesisStream" : {
+            "Type" : "AWS::Kinesis::Stream",
+            "Properties" : {
+            "Name" : "VPCFlow_KinesisStream",
+            "RetentionPeriodHours" : 24,
+            "ShardCount" : 12,
+            "Tags" : [ {"Key" : "Name", "Value" : { "Ref" : "AWS::StackId"} } ]
+            }
+        },
+        "VPCFlowKinesisFirehoseToElasticSearch" : {
+            "Type" : "AWS::KinesisFirehose::DeliveryStream",
+            "Properties" : {
+            "DeliveryStreamName" : "VPCFlow_KinesisFirehose_To_ElasticSearch",
+            "DeliveryStreamType" : "KinesisStreamAsSource",
+            "ElasticsearchDestinationConfiguration" : {
+                "BufferingHints": {"IntervalInSeconds": 60,"SizeInMBs": 50},
+                "DomainARN" : { "Fn::GetAtt" : [ "ElasticSearchConsolidatedLogsDomain", "DomainArn" ]},
+                "IndexName" : "vpcflow-",
+                "IndexRotationPeriod" : "OneDay",
+                "RetryOptions" : {"DurationInSeconds" : 10},
+                "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ]},
+                "S3BackupMode" : "FailedDocumentsOnly",
+                "S3Configuration" : {
+                    "BucketARN" : { "Fn::GetAtt" : [ "S3BucketFirehoseBackup", "Arn" ] },
+                    "BufferingHints" : {"IntervalInSeconds": 60,"SizeInMBs": 50},
+                    "CompressionFormat" : "GZIP",
+                    "Prefix" : "vpcflow",
+                    "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ] }
+                },
+                "TypeName" : "vpcflow"
+            },
+            "KinesisStreamSourceConfiguration" : { "KinesisStreamARN" : { "Fn::GetAtt" : [ "VPCFlowKinesisStream", "Arn" ]}, "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ]}}
+            }
+        },
+
+        "CloudTrailCloudWatchEventRule": {
+            "Type" : "AWS::Events::Rule",
+            "Properties" : {
+            "Description" : "CloudWatch EventRule to Filter CloudTrail Findings",
+            "EventPattern": {"source": ["aws.cloudtrail"]},
+            "State" : "ENABLED",
+            "Targets": [
+                {"Id": "CloudTrailKinesisStream",
+                "Arn": {"Fn::GetAtt": ["CloudTrailKinesisStream","Arn"]},
+                "RoleArn" : {"Fn::GetAtt" : ["CloudWatchLogsKinesisRole","Arn"]}
+                }]
+            }
+        },
+        "CloudTrailCreateTrail": {
+            "Type": "AWS::CloudTrail::Trail",
+            "Properties": {
+              "CloudWatchLogsLogGroupArn" : { "Fn::GetAtt": ["CloudTrailToCloudWatchLogGroup","Arn"]},
+              "CloudWatchLogsRoleArn" : { "Fn::GetAtt": ["CloudWatchLogsKinesisRole","Arn"]},
+              "S3BucketName": {"Ref": "S3BucketFirehoseBackup"},
+              "IsLogging": true,
+              "IncludeGlobalServiceEvents" : true,
+              "IsMultiRegionTrail" : true
+            }
+        },
+        "CloudTrailToCloudWatchLogGroup" : {
+            "Type" : "AWS::Logs::LogGroup",
+            "Properties" : {
+            "LogGroupName" : { "Fn::FindInMap" : [ "LogGroupNameList", "AWSCloudTrail", "Value" ]},
+            "RetentionInDays" : 60
+            }
+        },
+        "CloudTrailSubscriptionFilter" : {
+            "Type" : "AWS::Logs::SubscriptionFilter",
+            "Properties" : {
+            "DestinationArn" : {"Fn::GetAtt": ["CloudTrailKinesisStream","Arn"]},
+            "FilterPattern" : { "Fn::FindInMap" : [ "LogFormats", "AWSCloudTrail", "Value" ]},
+            "LogGroupName" : {"Ref": "CloudTrailToCloudWatchLogGroup"},
+            "RoleArn" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ] }
+            }
+        },
+        "CloudTrailKinesisStream" : {
+            "Type" : "AWS::Kinesis::Stream",
+            "Properties" : {
+            "Name" : "CloudTrail_KinesisStream",
+            "RetentionPeriodHours" : 24,
+            "ShardCount" : 12,
+            "Tags" : [ {"Key" : "Name", "Value" : { "Ref" : "AWS::StackId"} } ]
+            }
+        },
+        "CloudTrailKinesisFirehoseToElasticSearch" : {
+            "Type" : "AWS::KinesisFirehose::DeliveryStream",
+            "Properties" : {
+            "DeliveryStreamName" : "CloudTrail_KinesisFirehose_To_ElasticSearch",
+            "DeliveryStreamType" : "KinesisStreamAsSource",
+            "ElasticsearchDestinationConfiguration" : {
+                "BufferingHints": {"IntervalInSeconds": 60,"SizeInMBs": 50},
+                "DomainARN" : { "Fn::GetAtt" : [ "ElasticSearchConsolidatedLogsDomain", "DomainArn" ]},
+                "IndexName" : "cloudtrail-",
+                "IndexRotationPeriod" : "OneDay",
+                "RetryOptions" : {"DurationInSeconds" : 10},
+                "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ]},
+                "S3BackupMode" : "FailedDocumentsOnly",
+                "S3Configuration" : {
+                    "BucketARN" : { "Fn::GetAtt" : [ "S3BucketFirehoseBackup", "Arn" ] },
+                    "BufferingHints" : {"IntervalInSeconds": 60,"SizeInMBs": 50},
+                    "CompressionFormat" : "GZIP",
+                    "Prefix" : "cloudtrail",
+                    "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ] }
+                },
+                "TypeName" : "cloudtrail"
+            },
+            "KinesisStreamSourceConfiguration" : { "KinesisStreamARN" : { "Fn::GetAtt" : [ "CloudTrailKinesisStream", "Arn" ]}, "RoleARN" : { "Fn::GetAtt" : [ "CloudWatchLogsKinesisRole", "Arn" ]}}
+            }
+        },
 
         "S3BucketFirehoseBackup": {
             "DeletionPolicy": "Retain",
             "Type": "AWS::S3::Bucket",
             "Properties": {}
+        },
+        "S3BucketPolicyCloudTrail": {
+            "Type": "AWS::S3::BucketPolicy",
+            "Properties": {
+              "Bucket": {
+                "Ref": "S3BucketFirehoseBackup"
+              },
+              "PolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "AWSCloudTrailAclCheck",
+                    "Effect": "Allow",
+                    "Principal": {"Service": "*"},
+                    "Action": "s3:GetBucketAcl",
+                    "Resource": {"Fn::GetAtt" : ["S3BucketFirehoseBackup","Arn"]}
+                  },
+                  {
+                    "Sid": "AWSCloudTrailWrite",
+                    "Effect": "Allow",
+                    "Principal": {"Service": "*"},
+                    "Action": "s3:PutObject",
+                    "Resource": {"Fn::Join": ["",["arn:aws:s3:::",{"Ref": "S3BucketFirehoseBackup"},"/AWSLogs/",{"Ref": "AWS::AccountId"},"/*"]]},
+                    "Condition": {"StringEquals": {"s3:x-amz-acl": "bucket-owner-full-control"}}
+                  }
+                ]
+              }
+            }
         },
 
         "CognitoUserPool": {
@@ -359,7 +589,7 @@
                         {
                             "Effect": "Allow",
                             "Action": [
-                                "es:ESHttp*"
+                                "es:ESHttpGet"
                             ],
                             "Resource": [
                                 "*"
@@ -399,6 +629,7 @@
         },
         "RoleAttachment": {
             "Type": "AWS::Cognito::IdentityPoolRoleAttachment",
+            "DependsOn" : "CognitoKibanaAuthRole",
             "Properties": {
                 "IdentityPoolId": {
                     "Ref": "CognitoIDPool"
